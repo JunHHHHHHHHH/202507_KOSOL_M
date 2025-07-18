@@ -37,7 +37,26 @@ def initialize_rag_chain(openai_api_key, pdf_paths):
             raise e
     
     print(f"✅ [1/5] 전체 문서 로드 완료 - 총 {len(all_docs)}페이지")
-    
+   
+    # 🔹메타데이터 추가 코드 삽입
+    if file_names:
+        current_file_idx = 0
+        pages_processed = 0
+        
+        for i, pdf_path in enumerate(pdf_paths):
+            loader = PyPDFLoader(pdf_path)
+            docs = loader.load()
+            
+            # 각 문서에 메타데이터 추가
+            for doc in all_docs[pages_processed:pages_processed + len(docs)]:
+                doc.metadata['document_id'] = i
+                doc.metadata['document_name'] = file_names[i]
+                # 간단한 키워드 추출 (복잡한 extract_topic 함수 대신)
+                doc.metadata['topic'] = extract_simple_keywords(doc.page_content)
+            
+            pages_processed += len(docs)
+            print(f"📋 문서 {i+1} 메타데이터 추가 완료: {file_names[i]}")
+  
     # 문서가 비어있는지 확인
     if not all_docs:
         raise ValueError("PDF 문서들이 비어있거나 텍스트를 추출할 수 없습니다.")
@@ -79,8 +98,8 @@ def initialize_rag_chain(openai_api_key, pdf_paths):
         retriever = vectorstore.as_retriever(
             search_type="similarity",
             search_kwargs={
-                "k": 5,  # 다중 문서이므로 더 많은 청크 검색
-                "score_threshold": 0.7  # 유사도 임계값 설정
+                "k": 10,  # 다중 문서이므로 더 많은 청크 검색
+                "score_threshold": 0.5  # 유사도 임계값 설정
             }
         )
         print("✅ [4/5] 검색기 생성 완료")
@@ -93,6 +112,7 @@ def initialize_rag_chain(openai_api_key, pdf_paths):
 2. 다른 주제의 정보를 질문한 주제에 적용하지 마세요  
 3. 문맥에서 질문한 주제에 대한 구체적인 정보를 찾을 수 없다면 반드시 "해당 문서들에는 정보가 포함되어 있지 않습니다"라고 답변하세요
 4. 여러 문서에서 관련 정보를 찾은 경우, 통합하여 답변하세요
+5. 답변 시 해당 정보가 어느 문서에서 나온 것인지 명시하세요
 
 모든 답변은 한국어로 대답해주세요.
 
