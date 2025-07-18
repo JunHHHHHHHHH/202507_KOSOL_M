@@ -65,8 +65,8 @@ if ("rag_chain" not in st.session_state or
             
             st.write(f"📊 총 파일 크기: {total_file_size / (1024*1024):.2f} MB")
             
-            # RAG 체인 초기화 (여러 파일 경로 전달)
-            rag_chain, retriever = initialize_rag_chain(openai_api_key, temp_file_paths)
+            # RAG 체인 초기화 (여러 파일 경로와 파일명 전달)
+            rag_chain, retriever = initialize_rag_chain(openai_api_key, temp_file_paths, file_names)
             
             st.session_state.rag_chain = rag_chain
             st.session_state.retriever = retriever
