@@ -119,8 +119,8 @@ def initialize_rag_chain(openai_api_key, pdf_paths, file_names=None):
         retriever = vectorstore.as_retriever(
             search_type="similarity",
             search_kwargs={
-                "k": 15,  # 더 많은 청크 검색
-                "score_threshold": 0.3  # 유사도 임계값을 낮춤
+                "k": 20,  # 더 많은 청크 검색
+                "score_threshold": 0.2  # 유사도 임계값을 더 낮춤
             }
         )
         print("✅ [4/5] 검색기 생성 완료")
@@ -128,14 +128,12 @@ def initialize_rag_chain(openai_api_key, pdf_paths, file_names=None):
         # 5. OpenAI LLM 설정
         template = """당신은 주어진 문맥(context)의 내용을 바탕으로만 질문에 답하는 AI 어시스턴트입니다.
 
-**중요한 규칙:**
-1. 문맥에서 질문과 관련된 정보를 찾아 답변하세요
-2. 여러 문서에서 관련 정보를 찾은 경우, 통합하여 답변하세요
-3. 답변할 때는 반드시 각 정보의 정확한 출처를 명시하세요
-4. 출처는 문맥에서 제공된 [출처: ...] 형식을 그대로 사용하세요
-5. 문맥에서 질문한 주제에 대한 정보를 전혀 찾을 수 없는 경우에만 "해당 문서들에는 정보가 포함되어 있지 않습니다"라고 답변하세요
-
-모든 답변은 한국어로 대답해주세요.
+**절대 준수 사항:**
+1. 오직 제공된 CONTEXT 내용만 사용하여 답변하세요
+2. 외부 지식이나 일반적인 정보는 절대 사용하지 마세요
+3. 답변에는 반드시 (출처: 주간농사정보 제○호의 ○p) 형식으로 출처를 명시하세요
+4. CONTEXT에서 질문과 관련된 정보를 찾을 수 없다면 "해당 문서들에는 정보가 포함되어 있지 않습니다"라고 답변하세요
+5. 웹사이트 URL이나 외부 링크는 절대 사용하지 마세요
 
 CONTEXT: {context}
 
@@ -154,11 +152,17 @@ QUESTION: {question}
         
         def format_docs(docs):
             """문서들을 출처 정보와 함께 포맷팅"""
+            if not docs:
+                return "검색된 문서가 없습니다."
+            
             formatted = []
             for doc in docs:
                 source = doc.metadata.get('source_info', 'Unknown')
                 content = doc.page_content
+                # 디버깅: 출처 정보 확인
+                print(f"포맷팅 중인 문서 출처: {source}")
                 formatted.append(f"[출처: {source}]\n{content}")
+            
             return "\n\n".join(formatted)
         
         rag_chain = (
@@ -178,14 +182,31 @@ QUESTION: {question}
 
 def get_answer(chain, retriever, question):
     """RAG 체인과 검색기를 이용하여 답변을 생성합니다."""
-    # 디버깅: 검색 결과 확인
     try:
         docs = retriever.get_relevant_documents(question)
         print(f"검색된 문서 개수: {len(docs)}")
+        
+        if not docs:
+            return "해당 문서들에는 정보가 포함되어 있지 않습니다."
+        
+        # 업로드된 문서에서만 검색되었는지 확인
+        valid_docs = []
         for i, doc in enumerate(docs):
             source_info = doc.metadata.get('source_info', 'Unknown')
-            print(f"문서 {i+1} ({source_info}): {doc.page_content[:200]}...")
+            print(f"문서 {i+1} 출처: {source_info}")
+            print(f"내용: {doc.page_content[:100]}...")
+            
+            # 주간농사정보 문서인지 확인
+            if '주간농사정보' in source_info:
+                valid_docs.append(doc)
+        
+        if not valid_docs:
+            return "해당 문서들에는 정보가 포함되어 있지 않습니다."
+            
+        print(f"유효한 문서 개수: {len(valid_docs)}")
+        
     except Exception as e:
-        print(f"검색 디버깅 중 오류: {e}")
+        print(f"검색 오류: {e}")
+        return "검색 중 오류가 발생했습니다."
     
     return chain.invoke(question)
