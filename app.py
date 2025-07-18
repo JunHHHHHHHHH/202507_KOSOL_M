@@ -6,12 +6,10 @@ import tempfile
 from rag_logic import initialize_rag_chain, get_answer
 
 st.set_page_config(page_title="RAG Chatbot", page_icon="🤖")
-
 st.title("🤖 PDF 문서 기반 RAG Chatbot")
 
 # OpenAI API 키 입력
 st.sidebar.title("🔑 API 설정")
-
 openai_api_key = st.sidebar.text_input(
     "OpenAI API 키를 입력하세요:",
     type="password",
@@ -24,7 +22,6 @@ if not openai_api_key:
 
 # 파일 업로드 기능 (다중 파일 지원)
 st.sidebar.title("📄 문서 업로드")
-
 uploaded_files = st.sidebar.file_uploader(
     "PDF 파일들을 업로드하세요:",
     type=['pdf'],
@@ -41,8 +38,8 @@ if not uploaded_files:
 file_hashes = [str(hash(file.getvalue())) for file in uploaded_files]
 combined_hash = str(hash(tuple(file_hashes)))
 
-if ("rag_chain" not in st.session_state or
-    st.session_state.get("api_key") != openai_api_key or
+if ("rag_chain" not in st.session_state or 
+    st.session_state.get("api_key") != openai_api_key or 
     st.session_state.get("file_hash") != combined_hash):
     
     try:
@@ -66,17 +63,21 @@ if ("rag_chain" not in st.session_state or
             st.write(f"📊 총 파일 크기: {total_file_size / (1024*1024):.2f} MB")
             
             # RAG 체인 초기화 (여러 파일 경로와 파일명 전달)
-            rag_chain, retriever = initialize_rag_chain(openai_api_key, temp_file_paths, file_names)
+            rag_chain, retriever, api_key = initialize_rag_chain(openai_api_key, temp_file_paths, file_names)
             
             st.session_state.rag_chain = rag_chain
             st.session_state.retriever = retriever
             st.session_state.api_key = openai_api_key
+            st.session_state.openai_api_key = api_key  # API 키 저장
             st.session_state.file_hash = combined_hash
             st.session_state.file_names = file_names
             
             # 임시 파일들 삭제
             for temp_path in temp_file_paths:
-                os.unlink(temp_path)
+                try:
+                    os.unlink(temp_path)
+                except:
+                    pass
             
             st.success(f"✅ {len(file_names)}개 문서 분석 완료: {', '.join(file_names)}")
             
@@ -87,6 +88,7 @@ if ("rag_chain" not in st.session_state or
         st.info("• 파일이 손상되지 않았는지 확인")
         st.info("• 파일 크기가 너무 크지 않은지 확인")
         st.stop()
+        
     except Exception as e:
         st.error(f"❌ 초기화 오류: {str(e)}")
         st.info("💡 가능한 해결 방법:")
@@ -118,9 +120,15 @@ if prompt := st.chat_input("질문을 입력하세요"):
                 response = get_answer(
                     st.session_state.rag_chain,
                     st.session_state.retriever,
-                    prompt
+                    prompt,
+                    st.session_state.openai_api_key  # API 키 전달
                 )
-                st.markdown(response)
-                st.session_state.messages.append({"role": "assistant", "content": response})
+                
+            st.markdown(response)
+            st.session_state.messages.append({"role": "assistant", "content": response})
+            
         except Exception as e:
-            st.error(f"❌ 답변 생성 오류: {str(e)}")
+            error_msg = f"❌ 답변 생성 오류: {str(e)}"
+            st.error(error_msg)
+            st.session_state.messages.append({"role": "assistant", "content": error_msg})
+
