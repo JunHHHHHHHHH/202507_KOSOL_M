@@ -23,7 +23,7 @@ if not openai_api_key:
     st.stop()
 
 # 파일 업로드 기능 (다중 파일 지원)
-st.sidebar.title("📄 문서 업로드")
+st.sidebar.title("📄문서 업로드 기능")
 
 uploaded_files = st.sidebar.file_uploader(
     "PDF 파일들을 업로드하세요:",
