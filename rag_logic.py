@@ -1,6 +1,7 @@
 # rag_logic.py
 
 import os
+import re
 from langchain_community.document_loaders import PyPDFLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
@@ -8,6 +9,15 @@ from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain.prompts import ChatPromptTemplate
 from langchain.schema.runnable import RunnablePassthrough
 from langchain.schema.output_parser import StrOutputParser
+
+def extract_issue_number(filename):
+    """파일명에서 호수를 추출하는 함수"""
+    # 주간농사정보 제XX호 패턴을 찾아서 호수 추출
+    pattern = r'제(\d+)호'
+    match = re.search(pattern, filename)
+    if match:
+        return match.group(1)
+    return "Unknown"
 
 def initialize_rag_chain(openai_api_key, pdf_paths, file_names=None):
     """OpenAI API 키와 PDF 파일 경로 리스트를 받아 RAG 체인을 초기화합니다."""
@@ -24,24 +34,31 @@ def initialize_rag_chain(openai_api_key, pdf_paths, file_names=None):
             loader = PyPDFLoader(pdf_path)
             docs = loader.load()
             
+            # 파일명에서 호수 추출
+            if file_names and i < len(file_names):
+                filename = file_names[i]
+                issue_number = extract_issue_number(filename)
+            else:
+                filename = f"Document_{i+1}"
+                issue_number = str(i+1)
+            
             # 각 문서에 메타데이터 추가
-            for doc in docs:
+            for doc_idx, doc in enumerate(docs):
                 doc.metadata['file_index'] = i
                 doc.metadata['document_id'] = i
-                # file_names가 제공된 경우 사용, 아니면 기본값
-                if file_names and i < len(file_names):
-                    doc.metadata['file_name'] = file_names[i]
-                    doc.metadata['document_name'] = file_names[i]
-                else:
-                    doc.metadata['file_name'] = f"Document_{i+1}"
-                    doc.metadata['document_name'] = f"Document_{i+1}"
+                doc.metadata['file_name'] = filename
+                doc.metadata['document_name'] = filename
+                doc.metadata['issue_number'] = issue_number
                 
-                # 페이지 번호 정보 추가
-                page_num = doc.metadata.get('page', 0) + 1  # 0부터 시작하므로 +1
+                # 페이지 번호 정보 추가 (PyPDFLoader는 'page' 키로 페이지 번호 제공)
+                original_page = doc.metadata.get('page', doc_idx)
+                page_num = original_page + 1  # 0부터 시작하므로 +1
                 doc.metadata['page_number'] = page_num
                 
-                # 출처 정보 통합
-                doc.metadata['source_info'] = f"{doc.metadata['document_name']}의 {page_num}p"
+                # 정확한 출처 정보 생성
+                doc.metadata['source_info'] = f"주간농사정보 제{issue_number}호의 {page_num}p"
+                
+                print(f"메타데이터 추가: {doc.metadata['source_info']}")
             
             all_docs.extend(docs)
             print(f"✅ 파일 {i+1} 로드 완료 - {len(docs)}페이지")
@@ -75,14 +92,23 @@ def initialize_rag_chain(openai_api_key, pdf_paths, file_names=None):
         )
         
         splits = text_splitter.split_documents(all_docs)
+        
+        # 분할된 청크의 메타데이터 확인 및 보정
+        for split in splits:
+            if 'source_info' not in split.metadata:
+                # 원본 문서에서 메타데이터 복구
+                issue_num = split.metadata.get('issue_number', 'Unknown')
+                page_num = split.metadata.get('page_number', 'Unknown')
+                split.metadata['source_info'] = f"주간농사정보 제{issue_num}호의 {page_num}p"
+        
         print(f"✅ [2/5] 문서 분할 완료 - 총 {len(splits)}개 청크")
         
         # 분할 결과 확인
         if not splits:
             raise ValueError("문서 분할 결과가 비어있습니다.")
         
-        # 첫 번째 청크 내용 확인
-        print(f"첫 번째 청크 내용: {splits[0].page_content[:200]}...")
+        # 첫 번째 청크 메타데이터 확인
+        print(f"첫 번째 청크 출처: {splits[0].metadata.get('source_info', 'Unknown')}")
         
         # 3. OpenAI 임베딩 및 벡터 DB 설정
         embeddings = OpenAIEmbeddings(openai_api_key=openai_api_key)
@@ -105,8 +131,9 @@ def initialize_rag_chain(openai_api_key, pdf_paths, file_names=None):
 **중요한 규칙:**
 1. 문맥에서 질문과 관련된 정보를 찾아 답변하세요
 2. 여러 문서에서 관련 정보를 찾은 경우, 통합하여 답변하세요
-3. 답변할 때는 반드시 각 정보의 출처를 다음 형식으로 명시하세요: (출처: 주간농사정보 제○호의 ○p)
-4. 문맥에서 질문한 주제에 대한 정보를 전혀 찾을 수 없는 경우에만 "해당 문서들에는 정보가 포함되어 있지 않습니다"라고 답변하세요
+3. 답변할 때는 반드시 각 정보의 정확한 출처를 명시하세요
+4. 출처는 문맥에서 제공된 [출처: ...] 형식을 그대로 사용하세요
+5. 문맥에서 질문한 주제에 대한 정보를 전혀 찾을 수 없는 경우에만 "해당 문서들에는 정보가 포함되어 있지 않습니다"라고 답변하세요
 
 모든 답변은 한국어로 대답해주세요.
 
