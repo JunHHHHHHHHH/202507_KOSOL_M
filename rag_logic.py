@@ -203,7 +203,7 @@ def get_answer(chain, retriever, question, openai_api_key):
             source_info = doc.metadata.get('source_info', 'Unknown')
             print(f"문서 {i+1} 출처: {source_info}")
             print(f"내용 미리보기: {doc.page_content[:100]}...")
-               valid_docs.append(doc)
+            valid_docs.append(doc)
         
         if not valid_docs:
             return "문서에서 관련 정보를 찾을 수 없습니다."
