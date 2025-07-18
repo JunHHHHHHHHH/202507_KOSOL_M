@@ -52,15 +52,15 @@ def initialize_rag_chain(openai_api_key, pdf_paths, file_names=None):
                 doc.metadata['document_id'] = i
                 doc.metadata['file_name'] = filename
                 doc.metadata['document_name'] = filename
-                doc.metadata['issue_number'] = issue_number
-                
+                                
                 # 페이지 번호 정보 추가
                 original_page = doc.metadata.get('page', doc_idx)
                 page_num = original_page + 1
                 doc.metadata['page_number'] = page_num
                 
                 # 정확한 출처 정보 생성
-                doc.metadata['source_info'] = f"주간농사정보 제{issue_number}호의 {page_num}p"
+                base_filename = os.path.splitext(filename)[0]  # 확장자 제거
+                doc.metadata['source_info'] = f"{base_filename}의 {page_num}p"
                 print(f"메타데이터 추가: {doc.metadata['source_info']}")
             
             all_docs.extend(docs)
@@ -202,9 +202,7 @@ def get_answer(chain, retriever, question, openai_api_key):
             source_info = doc.metadata.get('source_info', 'Unknown')
             print(f"문서 {i+1} 출처: {source_info}")
             print(f"내용 미리보기: {doc.page_content[:100]}...")
-            
-            if '주간농사정보' in source_info:
-                valid_docs.append(doc)
+               valid_docs.append(doc)
         
         if not valid_docs:
             return "문서에서 관련 정보를 찾을 수 없습니다."
