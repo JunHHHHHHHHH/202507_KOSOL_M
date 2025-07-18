@@ -23,12 +23,12 @@ if not openai_api_key:
     st.stop()
 
 # 파일 업로드 기능 (다중 파일 지원)
-st.sidebar.title("📄문서 업로드 기능")
+st.sidebar.title("📄 문서 업로드")
 
 uploaded_files = st.sidebar.file_uploader(
     "PDF 파일들을 업로드하세요:",
     type=['pdf'],
-    accept_multiple_files=True,  # 다중 파일 업로드 활성화
+    accept_multiple_files=True,
     help="분석하고 싶은 여러 PDF 문서를 업로드하세요."
 )
 
