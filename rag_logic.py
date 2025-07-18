@@ -23,6 +23,10 @@ def initialize_rag_chain(openai_api_key, pdf_paths, file_names=None):
     """OpenAI API 키와 PDF 파일 경로 리스트를 받아 RAG 체인을 초기화합니다."""
     print("--- RAG 파이프라인 초기화 시작 ---")
     
+    # API 키 유효성 검사
+    if not openai_api_key or not openai_api_key.startswith('sk-'):
+        raise ValueError("유효한 OpenAI API 키를 입력해주세요.")
+    
     all_docs = []
     
     # 모든 PDF 파일을 순회하며 문서 로드
@@ -57,7 +61,6 @@ def initialize_rag_chain(openai_api_key, pdf_paths, file_names=None):
                 
                 # 정확한 출처 정보 생성
                 doc.metadata['source_info'] = f"주간농사정보 제{issue_number}호의 {page_num}p"
-                
                 print(f"메타데이터 추가: {doc.metadata['source_info']}")
             
             all_docs.extend(docs)
@@ -86,8 +89,8 @@ def initialize_rag_chain(openai_api_key, pdf_paths, file_names=None):
     try:
         # 2. 문서 분할 - 더 작은 청크로 분할
         text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=300,  # 더 작은 청크 크기
-            chunk_overlap=100,  # 더 큰 오버랩
+            chunk_size=500,  # 청크 크기 조정
+            chunk_overlap=50,  # 오버랩 조정
             separators=["\n\n", "\n", ".", "!", "?", ",", " ", ""],
             length_function=len
         )
@@ -100,7 +103,7 @@ def initialize_rag_chain(openai_api_key, pdf_paths, file_names=None):
                 issue_num = split.metadata.get('issue_number', 'Unknown')
                 page_num = split.metadata.get('page_number', 'Unknown')
                 split.metadata['source_info'] = f"주간농사정보 제{issue_num}호의 {page_num}p"
-                
+            
             # 청크 내용 미리보기 추가
             split.metadata['content_preview'] = split.page_content[:100] + "..." if len(split.page_content) > 100 else split.page_content
         
@@ -112,23 +115,20 @@ def initialize_rag_chain(openai_api_key, pdf_paths, file_names=None):
         # 3. OpenAI 임베딩 및 벡터 DB 설정
         embeddings = OpenAIEmbeddings(
             openai_api_key=openai_api_key,
-            model="text-embedding-3-small"  # 더 효율적인 임베딩 모델
+            model="text-embedding-3-small"
         )
+        
         vectorstore = FAISS.from_documents(documents=splits, embedding=embeddings)
         print("✅ [3/5] FAISS 벡터 DB 생성 완료")
         
-        # 4. 검색기 생성 - 더 관대한 설정
+        # 4. 검색기 생성
         retriever = vectorstore.as_retriever(
-            search_type="mmr",  # Maximum Marginal Relevance 사용
-            search_kwargs={
-                "k": 25,  # 더 많은 청크 검색
-                "fetch_k": 50,  # MMR을 위해 더 많은 후보 검색
-                "lambda_mult": 0.5,  # 다양성과 유사성의 균형
-            }
+            search_type="similarity",
+            search_kwargs={"k": 10}  # 검색 결과 수 조정
         )
         print("✅ [4/5] 검색기 생성 완료")
         
-        # 5. 개선된 OpenAI LLM 설정
+        # 5. OpenAI LLM 설정
         template = """당신은 해당 분야의 전문가입니다. 주어진 문맥(context)을 바탕으로 질문에 답변해주세요.
 
 **답변 지침:**
@@ -146,12 +146,13 @@ def initialize_rag_chain(openai_api_key, pdf_paths, file_names=None):
 **답변:**"""
         
         prompt = ChatPromptTemplate.from_template(template)
+        
         llm = ChatOpenAI(
-            model="gpt-4o-mini",  # 더 강력한 모델
+            model="gpt-4o-mini",
             temperature=0,
             openai_api_key=openai_api_key,
             max_tokens=1000,
-            timeout=30
+            timeout=60  # 타임아웃 증가
         )
         
         def format_docs(docs):
@@ -164,7 +165,6 @@ def initialize_rag_chain(openai_api_key, pdf_paths, file_names=None):
                 source = doc.metadata.get('source_info', 'Unknown')
                 content = doc.page_content
                 print(f"포맷팅 중인 문서 {i+1}: {source}")
-                print(f"내용 미리보기: {content[:200]}...")
                 formatted.append(f"[출처: {source}]\n{content}")
             
             return "\n\n".join(formatted)
@@ -178,42 +178,40 @@ def initialize_rag_chain(openai_api_key, pdf_paths, file_names=None):
         
         print("✅ [5/5] RAG 체인 생성 완료")
         
-        return rag_chain, retriever
+        return rag_chain, retriever, openai_api_key
         
     except Exception as e:
         print(f"❌ RAG 초기화 중 오류 발생: {str(e)}")
         raise e
 
-def get_answer(chain, retriever, question):
+def get_answer(chain, retriever, question, openai_api_key):
     """RAG 체인과 검색기를 이용하여 답변을 생성합니다."""
     try:
-        # 원본 질문으로 검색
-        docs = retriever.get_relevant_documents(question)
+        print(f"질문: {question}")
         
+        # 검색 수행
+        docs = retriever.get_relevant_documents(question)
         print(f"검색된 문서 개수: {len(docs)}")
         
         if not docs:
-            return "해당 문서들에는 정보가 포함되어 있지 않습니다."
+            return "해당 문서들에는 관련 정보가 포함되어 있지 않습니다."
         
-        # 주간농사정보 문서에서만 검색되었는지 확인
+        # 검색된 문서들 확인
         valid_docs = []
         for i, doc in enumerate(docs):
             source_info = doc.metadata.get('source_info', 'Unknown')
             print(f"문서 {i+1} 출처: {source_info}")
-            print(f"내용: {doc.page_content[:150]}...")
+            print(f"내용 미리보기: {doc.page_content[:100]}...")
             
             if '주간농사정보' in source_info:
                 valid_docs.append(doc)
         
         if not valid_docs:
-            return "해당 문서들에는 정보가 포함되어 있지 않습니다."
-            
+            return "문서에서 관련 정보를 찾을 수 없습니다."
+        
         print(f"유효한 문서 개수: {len(valid_docs)}")
         
-        # 상위 10개 문서만 사용
-        top_docs = valid_docs[:10]
-        
-        # 문서들을 포맷팅하여 컨텍스트 생성
+        # 상위 문서들로 컨텍스트 생성
         def format_docs_for_context(docs):
             formatted = []
             for doc in docs:
@@ -222,9 +220,9 @@ def get_answer(chain, retriever, question):
                 formatted.append(f"[출처: {source}]\n{content}")
             return "\n\n".join(formatted)
         
-        context = format_docs_for_context(top_docs)
+        context = format_docs_for_context(valid_docs[:8])  # 상위 8개 문서만 사용
         
-        # 프롬프트 직접 구성
+        # 프롬프트 구성
         prompt_text = f"""당신은 해당 분야의 전문가입니다. 주어진 문맥(context)을 바탕으로 질문에 답변해주세요.
 
 **답변 지침:**
@@ -245,14 +243,14 @@ def get_answer(chain, retriever, question):
         llm = ChatOpenAI(
             model="gpt-4o-mini",
             temperature=0,
+            openai_api_key=openai_api_key,
             max_tokens=1000,
-            timeout=30
+            timeout=60
         )
         
         response = llm.invoke(prompt_text)
         return response.content
         
     except Exception as e:
-        print(f"검색 오류: {e}")
-        return "검색 중 오류가 발생했습니다."
-
+        print(f"상세 오류 정보: {str(e)}")
+        return f"답변 생성 중 오류가 발생했습니다: {str(e)}"
