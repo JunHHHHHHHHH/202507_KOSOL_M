@@ -9,10 +9,10 @@ from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain.prompts import ChatPromptTemplate
 from langchain.schema.runnable import RunnablePassthrough
 from langchain.schema.output_parser import StrOutputParser
+from langchain.schema import Document
 
 def extract_issue_number(filename):
     """파일명에서 호수를 추출하는 함수"""
-    # 주간농사정보 제XX호 패턴을 찾아서 호수 추출
     pattern = r'제(\d+)호'
     match = re.search(pattern, filename)
     if match:
@@ -42,7 +42,7 @@ def initialize_rag_chain(openai_api_key, pdf_paths, file_names=None):
                 filename = f"Document_{i+1}"
                 issue_number = str(i+1)
             
-            # 각 문서에 메타데이터 추가
+            # 각 문서에 풍부한 메타데이터 추가
             for doc_idx, doc in enumerate(docs):
                 doc.metadata['file_index'] = i
                 doc.metadata['document_id'] = i
@@ -50,9 +50,9 @@ def initialize_rag_chain(openai_api_key, pdf_paths, file_names=None):
                 doc.metadata['document_name'] = filename
                 doc.metadata['issue_number'] = issue_number
                 
-                # 페이지 번호 정보 추가 (PyPDFLoader는 'page' 키로 페이지 번호 제공)
+                # 페이지 번호 정보 추가
                 original_page = doc.metadata.get('page', doc_idx)
-                page_num = original_page + 1  # 0부터 시작하므로 +1
+                page_num = original_page + 1
                 doc.metadata['page_number'] = page_num
                 
                 # 정확한 출처 정보 생성
@@ -84,11 +84,12 @@ def initialize_rag_chain(openai_api_key, pdf_paths, file_names=None):
         raise ValueError("문서 내용이 너무 짧습니다. 스캔된 이미지 PDF일 가능성이 있습니다.")
     
     try:
-        # 2. 문서 분할
+        # 2. 문서 분할 - 더 작은 청크로 분할
         text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=500,
-            chunk_overlap=50,
-            separators=["\n\n", "\n", ".", "!", "?", ",", " ", ""]
+            chunk_size=300,  # 더 작은 청크 크기
+            chunk_overlap=100,  # 더 큰 오버랩
+            separators=["\n\n", "\n", ".", "!", "?", ",", " ", ""],
+            length_function=len
         )
         
         splits = text_splitter.split_documents(all_docs)
@@ -96,57 +97,60 @@ def initialize_rag_chain(openai_api_key, pdf_paths, file_names=None):
         # 분할된 청크의 메타데이터 확인 및 보정
         for split in splits:
             if 'source_info' not in split.metadata:
-                # 원본 문서에서 메타데이터 복구
                 issue_num = split.metadata.get('issue_number', 'Unknown')
                 page_num = split.metadata.get('page_number', 'Unknown')
                 split.metadata['source_info'] = f"주간농사정보 제{issue_num}호의 {page_num}p"
+                
+            # 청크 내용 미리보기 추가
+            split.metadata['content_preview'] = split.page_content[:100] + "..." if len(split.page_content) > 100 else split.page_content
         
         print(f"✅ [2/5] 문서 분할 완료 - 총 {len(splits)}개 청크")
         
-        # 분할 결과 확인
         if not splits:
             raise ValueError("문서 분할 결과가 비어있습니다.")
         
-        # 첫 번째 청크 메타데이터 확인
-        print(f"첫 번째 청크 출처: {splits[0].metadata.get('source_info', 'Unknown')}")
-        
         # 3. OpenAI 임베딩 및 벡터 DB 설정
-        embeddings = OpenAIEmbeddings(openai_api_key=openai_api_key)
+        embeddings = OpenAIEmbeddings(
+            openai_api_key=openai_api_key,
+            model="text-embedding-3-small"  # 더 효율적인 임베딩 모델
+        )
         vectorstore = FAISS.from_documents(documents=splits, embedding=embeddings)
         print("✅ [3/5] FAISS 벡터 DB 생성 완료")
         
-        # 4. 검색기 생성 (개선된 파라미터)
+        # 4. 검색기 생성 - 더 관대한 설정
         retriever = vectorstore.as_retriever(
-            search_type="similarity",
+            search_type="mmr",  # Maximum Marginal Relevance 사용
             search_kwargs={
-                "k": 20,  # 더 많은 청크 검색
-                "score_threshold": 0.2  # 유사도 임계값을 더 낮춤
+                "k": 25,  # 더 많은 청크 검색
+                "fetch_k": 50,  # MMR을 위해 더 많은 후보 검색
+                "lambda_mult": 0.5,  # 다양성과 유사성의 균형
             }
         )
         print("✅ [4/5] 검색기 생성 완료")
         
-        # 5. OpenAI LLM 설정
-        template = """당신은 주어진 문맥(context)의 내용을 바탕으로만 질문에 답하는 AI 어시스턴트입니다.
+        # 5. 개선된 OpenAI LLM 설정
+        template = """당신은 해당 분야의 전문가입니다. 주어진 문맥(context)을 바탕으로 질문에 답변해주세요.
 
-**절대 준수 사항:**
-1. 오직 제공된 CONTEXT 내용만 사용하여 답변하세요
-2. 외부 지식이나 일반적인 정보는 절대 사용하지 마세요
-3. 답변에는 반드시 (출처: 주간농사정보 제○호의 ○p) 형식으로 출처를 명시하세요
-4. CONTEXT에서 질문과 관련된 정보를 찾을 수 없다면 "해당 문서들에는 정보가 포함되어 있지 않습니다"라고 답변하세요
-5. 웹사이트 URL이나 외부 링크는 절대 사용하지 마세요
+**답변 지침:**
+1. 문맥에서 질문과 관련된 정보를 찾아서 구체적으로 답변하세요
+2. 여러 문서에서 관련 정보를 찾은 경우, 모든 정보를 통합하여 답변하세요
+3. 답변할 때는 반드시 업로드 된 문서를 기준으로 출처를 명시하세요
+4. 질문과 관련된 정보가 직접 언급되지 않아도 관련된 내용이나 유사한 정보가 있다면 참고하여 답변하세요
+5. 문맥에서 직접적인 답변을 찾을 수 없는 경우에만 "해당 문서들에는 구체적인 정보가 포함되어 있지 않습니다"라고 답변하세요
 
-CONTEXT: {context}
+**문맥 정보:**
+{context}
 
-QUESTION: {question}
+**질문:** {question}
 
-답변:"""
+**답변:**"""
         
         prompt = ChatPromptTemplate.from_template(template)
         llm = ChatOpenAI(
-            model="gpt-3.5-turbo",
+            model="gpt-4o-mini",  # 더 강력한 모델
             temperature=0,
             openai_api_key=openai_api_key,
-            max_tokens=800,
+            max_tokens=1000,
             timeout=30
         )
         
@@ -156,11 +160,11 @@ QUESTION: {question}
                 return "검색된 문서가 없습니다."
             
             formatted = []
-            for doc in docs:
+            for i, doc in enumerate(docs):
                 source = doc.metadata.get('source_info', 'Unknown')
                 content = doc.page_content
-                # 디버깅: 출처 정보 확인
-                print(f"포맷팅 중인 문서 출처: {source}")
+                print(f"포맷팅 중인 문서 {i+1}: {source}")
+                print(f"내용 미리보기: {content[:200]}...")
                 formatted.append(f"[출처: {source}]\n{content}")
             
             return "\n\n".join(formatted)
@@ -183,20 +187,21 @@ QUESTION: {question}
 def get_answer(chain, retriever, question):
     """RAG 체인과 검색기를 이용하여 답변을 생성합니다."""
     try:
+        # 원본 질문으로 검색
         docs = retriever.get_relevant_documents(question)
+        
         print(f"검색된 문서 개수: {len(docs)}")
         
         if not docs:
             return "해당 문서들에는 정보가 포함되어 있지 않습니다."
         
-        # 업로드된 문서에서만 검색되었는지 확인
+        # 주간농사정보 문서에서만 검색되었는지 확인
         valid_docs = []
         for i, doc in enumerate(docs):
             source_info = doc.metadata.get('source_info', 'Unknown')
             print(f"문서 {i+1} 출처: {source_info}")
-            print(f"내용: {doc.page_content[:100]}...")
+            print(f"내용: {doc.page_content[:150]}...")
             
-            # 주간농사정보 문서인지 확인
             if '주간농사정보' in source_info:
                 valid_docs.append(doc)
         
@@ -205,8 +210,49 @@ def get_answer(chain, retriever, question):
             
         print(f"유효한 문서 개수: {len(valid_docs)}")
         
+        # 상위 10개 문서만 사용
+        top_docs = valid_docs[:10]
+        
+        # 문서들을 포맷팅하여 컨텍스트 생성
+        def format_docs_for_context(docs):
+            formatted = []
+            for doc in docs:
+                source = doc.metadata.get('source_info', 'Unknown')
+                content = doc.page_content
+                formatted.append(f"[출처: {source}]\n{content}")
+            return "\n\n".join(formatted)
+        
+        context = format_docs_for_context(top_docs)
+        
+        # 프롬프트 직접 구성
+        prompt_text = f"""당신은 해당 분야의 전문가입니다. 주어진 문맥(context)을 바탕으로 질문에 답변해주세요.
+
+**답변 지침:**
+1. 문맥에서 질문과 관련된 정보를 찾아서 구체적으로 답변하세요
+2. 여러 문서에서 관련 정보를 찾은 경우, 모든 정보를 통합하여 답변하세요
+3. 답변할 때는 반드시 업로드 된 문서를 기준으로 출처를 명시하세요
+4. 질문과 관련된 정보가 직접 언급되지 않아도 관련된 내용이나 유사한 정보가 있다면 참고하여 답변하세요
+5. 문맥에서 직접적인 답변을 찾을 수 없는 경우에만 "해당 문서들에는 구체적인 정보가 포함되어 있지 않습니다"라고 답변하세요
+
+**문맥 정보:**
+{context}
+
+**질문:** {question}
+
+**답변:**"""
+        
+        # LLM 직접 호출
+        llm = ChatOpenAI(
+            model="gpt-4o-mini",
+            temperature=0,
+            max_tokens=1000,
+            timeout=30
+        )
+        
+        response = llm.invoke(prompt_text)
+        return response.content
+        
     except Exception as e:
         print(f"검색 오류: {e}")
         return "검색 중 오류가 발생했습니다."
-    
-    return chain.invoke(question)
+
