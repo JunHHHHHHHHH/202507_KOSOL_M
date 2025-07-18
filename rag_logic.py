@@ -35,6 +35,13 @@ def initialize_rag_chain(openai_api_key, pdf_paths, file_names=None):
                 else:
                     doc.metadata['file_name'] = f"Document_{i+1}"
                     doc.metadata['document_name'] = f"Document_{i+1}"
+                
+                # 페이지 번호 정보 추가
+                page_num = doc.metadata.get('page', 0) + 1  # 0부터 시작하므로 +1
+                doc.metadata['page_number'] = page_num
+                
+                # 출처 정보 통합
+                doc.metadata['source_info'] = f"{doc.metadata['document_name']}의 {page_num}p"
             
             all_docs.extend(docs)
             print(f"✅ 파일 {i+1} 로드 완료 - {len(docs)}페이지")
@@ -98,7 +105,7 @@ def initialize_rag_chain(openai_api_key, pdf_paths, file_names=None):
 **중요한 규칙:**
 1. 문맥에서 질문과 관련된 정보를 찾아 답변하세요
 2. 여러 문서에서 관련 정보를 찾은 경우, 통합하여 답변하세요
-3. 답변 시 해당 정보가 어느 문서에서 나온 것인지 명시하세요
+3. 답변할 때는 반드시 각 정보의 출처를 다음 형식으로 명시하세요: (출처: 주간농사정보 제○호의 ○p)
 4. 문맥에서 질문한 주제에 대한 정보를 전혀 찾을 수 없는 경우에만 "해당 문서들에는 정보가 포함되어 있지 않습니다"라고 답변하세요
 
 모든 답변은 한국어로 대답해주세요.
@@ -118,8 +125,17 @@ QUESTION: {question}
             timeout=30
         )
         
+        def format_docs(docs):
+            """문서들을 출처 정보와 함께 포맷팅"""
+            formatted = []
+            for doc in docs:
+                source = doc.metadata.get('source_info', 'Unknown')
+                content = doc.page_content
+                formatted.append(f"[출처: {source}]\n{content}")
+            return "\n\n".join(formatted)
+        
         rag_chain = (
-            {"context": retriever, "question": RunnablePassthrough()}
+            {"context": retriever | format_docs, "question": RunnablePassthrough()}
             | prompt
             | llm
             | StrOutputParser()
@@ -140,8 +156,8 @@ def get_answer(chain, retriever, question):
         docs = retriever.get_relevant_documents(question)
         print(f"검색된 문서 개수: {len(docs)}")
         for i, doc in enumerate(docs):
-            doc_name = doc.metadata.get('document_name', doc.metadata.get('file_name', 'Unknown'))
-            print(f"문서 {i+1} ({doc_name}): {doc.page_content[:200]}...")
+            source_info = doc.metadata.get('source_info', 'Unknown')
+            print(f"문서 {i+1} ({source_info}): {doc.page_content[:200]}...")
     except Exception as e:
         print(f"검색 디버깅 중 오류: {e}")
     
