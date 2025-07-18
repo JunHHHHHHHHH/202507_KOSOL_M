@@ -100,9 +100,10 @@ def initialize_rag_chain(openai_api_key, pdf_paths, file_names=None):
         # 분할된 청크의 메타데이터 확인 및 보정
         for split in splits:
             if 'source_info' not in split.metadata:
-                issue_num = split.metadata.get('issue_number', 'Unknown')
+                file_name = split.metadata.get('file_name', 'Unknown')
+                base_filename = os.path.splitext(file_name)[0]
                 page_num = split.metadata.get('page_number', 'Unknown')
-                split.metadata['source_info'] = f"주간농사정보 제{issue_num}호의 {page_num}p"
+                split.metadata['source_info'] = f"{base_filename}의 {page_num}p"
             
             # 청크 내용 미리보기 추가
             split.metadata['content_preview'] = split.page_content[:100] + "..." if len(split.page_content) > 100 else split.page_content
