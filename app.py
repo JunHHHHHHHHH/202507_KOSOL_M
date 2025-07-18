@@ -131,4 +131,3 @@ if prompt := st.chat_input("질문을 입력하세요"):
             error_msg = f"❌ 답변 생성 오류: {str(e)}"
             st.error(error_msg)
             st.session_state.messages.append({"role": "assistant", "content": error_msg})
-
