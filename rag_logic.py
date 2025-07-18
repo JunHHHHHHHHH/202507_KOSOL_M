@@ -9,7 +9,7 @@ from langchain.prompts import ChatPromptTemplate
 from langchain.schema.runnable import RunnablePassthrough
 from langchain.schema.output_parser import StrOutputParser
 
-def initialize_rag_chain(openai_api_key, pdf_paths):
+def initialize_rag_chain(openai_api_key, pdf_paths, file_names=None):
     """OpenAI API 키와 PDF 파일 경로 리스트를 받아 RAG 체인을 초기화합니다."""
     print("--- RAG 파이프라인 초기화 시작 ---")
     
@@ -24,10 +24,17 @@ def initialize_rag_chain(openai_api_key, pdf_paths):
             loader = PyPDFLoader(pdf_path)
             docs = loader.load()
             
-            # 각 문서에 파일 인덱스 메타데이터 추가
+            # 각 문서에 메타데이터 추가
             for doc in docs:
                 doc.metadata['file_index'] = i
-                doc.metadata['file_name'] = f"Document_{i+1}"
+                doc.metadata['document_id'] = i
+                # file_names가 제공된 경우 사용, 아니면 기본값
+                if file_names and i < len(file_names):
+                    doc.metadata['file_name'] = file_names[i]
+                    doc.metadata['document_name'] = file_names[i]
+                else:
+                    doc.metadata['file_name'] = f"Document_{i+1}"
+                    doc.metadata['document_name'] = f"Document_{i+1}"
             
             all_docs.extend(docs)
             print(f"✅ 파일 {i+1} 로드 완료 - {len(docs)}페이지")
@@ -37,26 +44,7 @@ def initialize_rag_chain(openai_api_key, pdf_paths):
             raise e
     
     print(f"✅ [1/5] 전체 문서 로드 완료 - 총 {len(all_docs)}페이지")
-   
-    # 🔹메타데이터 추가 코드 삽입
-    if file_names:
-        current_file_idx = 0
-        pages_processed = 0
-        
-        for i, pdf_path in enumerate(pdf_paths):
-            loader = PyPDFLoader(pdf_path)
-            docs = loader.load()
-            
-            # 각 문서에 메타데이터 추가
-            for doc in all_docs[pages_processed:pages_processed + len(docs)]:
-                doc.metadata['document_id'] = i
-                doc.metadata['document_name'] = file_names[i]
-                # 간단한 키워드 추출 (복잡한 extract_topic 함수 대신)
-                doc.metadata['topic'] = extract_simple_keywords(doc.page_content)
-            
-            pages_processed += len(docs)
-            print(f"📋 문서 {i+1} 메타데이터 추가 완료: {file_names[i]}")
-  
+    
     # 문서가 비어있는지 확인
     if not all_docs:
         raise ValueError("PDF 문서들이 비어있거나 텍스트를 추출할 수 없습니다.")
@@ -94,12 +82,12 @@ def initialize_rag_chain(openai_api_key, pdf_paths):
         vectorstore = FAISS.from_documents(documents=splits, embedding=embeddings)
         print("✅ [3/5] FAISS 벡터 DB 생성 완료")
         
-        # 4. 검색기 생성
+        # 4. 검색기 생성 (개선된 파라미터)
         retriever = vectorstore.as_retriever(
             search_type="similarity",
             search_kwargs={
-                "k": 10,  # 다중 문서이므로 더 많은 청크 검색
-                "score_threshold": 0.5  # 유사도 임계값 설정
+                "k": 15,  # 더 많은 청크 검색
+                "score_threshold": 0.3  # 유사도 임계값을 낮춤
             }
         )
         print("✅ [4/5] 검색기 생성 완료")
@@ -108,11 +96,10 @@ def initialize_rag_chain(openai_api_key, pdf_paths):
         template = """당신은 주어진 문맥(context)의 내용을 바탕으로만 질문에 답하는 AI 어시스턴트입니다.
 
 **중요한 규칙:**
-1. 질문과 정확히 일치하는 주제에 대한 정보만 답변하세요
-2. 다른 주제의 정보를 질문한 주제에 적용하지 마세요  
-3. 문맥에서 질문한 주제에 대한 구체적인 정보를 찾을 수 없다면 반드시 "해당 문서들에는 정보가 포함되어 있지 않습니다"라고 답변하세요
-4. 여러 문서에서 관련 정보를 찾은 경우, 통합하여 답변하세요
-5. 답변 시 해당 정보가 어느 문서에서 나온 것인지 명시하세요
+1. 문맥에서 질문과 관련된 정보를 찾아 답변하세요
+2. 여러 문서에서 관련 정보를 찾은 경우, 통합하여 답변하세요
+3. 답변 시 해당 정보가 어느 문서에서 나온 것인지 명시하세요
+4. 문맥에서 질문한 주제에 대한 정보를 전혀 찾을 수 없는 경우에만 "해당 문서들에는 정보가 포함되어 있지 않습니다"라고 답변하세요
 
 모든 답변은 한국어로 대답해주세요.
 
@@ -120,14 +107,14 @@ CONTEXT: {context}
 
 QUESTION: {question}
 
-"""
+답변:"""
         
         prompt = ChatPromptTemplate.from_template(template)
         llm = ChatOpenAI(
             model="gpt-3.5-turbo",
             temperature=0,
             openai_api_key=openai_api_key,
-            max_tokens=500,
+            max_tokens=800,
             timeout=30
         )
         
@@ -153,8 +140,8 @@ def get_answer(chain, retriever, question):
         docs = retriever.get_relevant_documents(question)
         print(f"검색된 문서 개수: {len(docs)}")
         for i, doc in enumerate(docs):
-            file_info = doc.metadata.get('file_name', 'Unknown')
-            print(f"문서 {i+1} ({file_info}): {doc.page_content[:200]}...")
+            doc_name = doc.metadata.get('document_name', doc.metadata.get('file_name', 'Unknown'))
+            print(f"문서 {i+1} ({doc_name}): {doc.page_content[:200]}...")
     except Exception as e:
         print(f"검색 디버깅 중 오류: {e}")
     
