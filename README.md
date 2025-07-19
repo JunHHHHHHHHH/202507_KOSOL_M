@@ -1,4 +1,4 @@
-1개 이상의 PDF를 업로드하여 RAG로 답변
+<1개 이상의 PDF를 업로드하면 RAG로 답변> Last update. 25.07.17. JUNHWAN
 
 ※주요 특징
 
