@@ -8,3 +8,4 @@
   
 -검색 시: 벡터 DB에서 유사도 검색을 통해 관련 문서 청크를 찾아 답변 생성
 
+https://202507kosolm-sh7fvrljge7ihztar3h7k2.streamlit.app/
