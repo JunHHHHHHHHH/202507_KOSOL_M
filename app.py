@@ -6,7 +6,7 @@ import tempfile
 from rag_logic import initialize_rag_chain, get_answer
 
 st.set_page_config(page_title="RAG Chatbot", page_icon="🤖")
-st.title("PDF문서 기반 RAG Chatbot_코솔")
+st.title("PDF문서 기반 RAG Chatbot_JunH")
 
 # OpenAI API 키 입력
 st.sidebar.title("🔑 API 설정")
@@ -131,3 +131,4 @@ if prompt := st.chat_input("질문을 입력하세요"):
             error_msg = f"❌ 답변 생성 오류: {str(e)}"
             st.error(error_msg)
             st.session_state.messages.append({"role": "assistant", "content": error_msg})
+
